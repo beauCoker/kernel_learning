@@ -29,6 +29,8 @@ def nlpd_err(mean, cov, obs):
 def diagnlpd_err(mean, cov, obs):
     return -jnp.mean(norm.logpdf(obs, loc=mean, scale=jnp.sqrt(jnp.diag(cov)).reshape(-1)))
 
+def trace_of_cov(mean, cov, obs):
+    return jnp.trace(cov)
 
 def compute_error(metric, true, *pred):
     '''

@@ -30,12 +30,12 @@ CONFIG_DEFAULT = {
     'ds_kern_var': 1.0,
     'ds_seed': 4,
     'ds_seed_split': 1,
-    'm_name': 'exact_gp',
+    'm_name': 'mcmc_gp',
     'm_kern_name': 'matern12',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
-    'm_kern_var_prior': True,
-    'm_kern_ls_prior': True,
+    'm_kern_var_prior': 'gamma',
+    'm_kern_ls_prior': 'gamma',
     'opt_n_samp': 100, # prior and posterior samples (for predictives and mcmc)
     'noise_std': .01,
     'dim_in': 1,
@@ -46,7 +46,7 @@ ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
     'k_metrics': {'fro': fro_err, 'align': align_err},
-    'fdist_metrics': {'nlpd': nlpd_err, 'diagnlpd': diagnlpd_err}
+    'fdist_metrics': {'nlpd': nlpd_err, 'diagnlpd': diagnlpd_err, 'trace': trace_of_cov} # applyed to f and y distributions
 }
 
 def main():
@@ -126,7 +126,6 @@ def main():
             # k samples
             k_samp = model.sample_k(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
             k_mean = np.mean(k_samp, 0)
-            breakpoint()
 
             # metrics
 
