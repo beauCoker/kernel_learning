@@ -173,6 +173,15 @@ def main():
                     wandb.log({file_name: wandb.Image(fig2img(fig))})
     
 
+    # metrics that depend on prior and posterior
+    for cond in ['prior', 'post']:
+        for split in ['train','test','grid']:
+            for dist in ['fdist','ydist']:
+                for avg in ['error', 'risk']:
+                    if 'trace' in ARGS['fdist_metrics']:
+                        prefix = '_'.join([dist,avg,'']) 
+                        res[cond][split][prefix + 'contract'] = res['prior'][split][prefix + 'trace'] - res[cond][split][prefix + 'trace']
+                
     # to flat for wandb
     if not TESTRUN:
         res_flat = to_flat_dict({}, res)
