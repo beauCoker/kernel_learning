@@ -2,7 +2,6 @@
 import time
 import os
 import sys
-import argparse
 import pdb
 
 # package imports 
@@ -31,12 +30,13 @@ CONFIG_DEFAULT = {
     'ds_kern_var': 1.0,
     'ds_seed': 4,
     'ds_seed_split': 1,
-    'm_name': 'filtered_gp',
+    'm_name': 'exact_gp',
     'm_kern_name': 'matern12',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
-    #'m_kern_var_prior': True,
-    #'m_kern_ls_prior': True,
+    'm_kern_var_prior': True,
+    'm_kern_ls_prior': True,
+    'opt_n_samp': 100, # prior and posterior samples (for predictives and mcmc)
     'noise_std': .01,
     'dim_in': 1,
 }
@@ -44,8 +44,6 @@ CONFIG_DEFAULT = {
 TESTRUN = True
 ARGS ={
     'dir_out': './output/',
-    'use_predict': True,
-    'models_with_predict': ['exact_gp'], # predict methods if available
     'f_metrics': {'sqerr': sq_err},
     'k_metrics': {'fro': fro_err, 'align': align_err},
     'fdist_metrics': {'nlpd': nlpd_err, 'diagnlpd': diagnlpd_err}
@@ -66,8 +64,6 @@ def main():
     # parse config by use
     config_m, config_ds, config_opt, config_exp = parse_config(config, 'm_', 'ds_', 'opt_')
     transfer_args(['dim_in','noise_std'], config_exp, config_m, config_ds)
-
-    use_predict = ARGS['use_predict'] and config_m['name'] in ARGS['models_with_predict']
 
     # load data
     ds = load_dataset(**config_ds)
@@ -92,11 +88,10 @@ def main():
                 continue
 
             # sample
-            n_samp = 100
 
             # f and y samples
             if hasattr(model, 'sample_fdist'):
-                fdist, ydist = model.sample_fdist(ds[split]['x'], n_samp=n_samp, prior=cond=='prior')
+                fdist, ydist = model.sample_fdist(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
                 
                 # f
                 f_samp = fdist.sample().detach().numpy() # SxN
@@ -129,8 +124,9 @@ def main():
                 y_cov = np.cov(y_samp, 0) # NxN
 
             # k samples
-            k_samp = model.sample_k(ds[split]['x'], n_samp=n_samp, prior=cond=='prior')
+            k_samp = model.sample_k(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
             k_mean = np.mean(k_samp, 0)
+            breakpoint()
 
             # metrics
 
@@ -173,7 +169,7 @@ def main():
                 file_name = 'f_%s_%s' % (cond, split)
                 
                 if TESTRUN:
-                    fig.savefig(file_name + '.png')
+                    fig.savefig(os.path.join(ARGS['dir_out'], file_name + '.png'))
                 else:
                     wandb.log({file_name: wandb.Image(fig2img(fig))})
     

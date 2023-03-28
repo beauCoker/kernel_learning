@@ -14,82 +14,99 @@ from pyro.infer.mcmc import NUTS, MCMC, HMC
 from src.util import *
 
 class ExactGP(object):
-    def __init__(self, kernel, x, y, noise_std):
+    def __init__(self, kernel, x, y, noise_std, train_likelihood=False):
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         self.likelihood.noise = noise_std**2
-        self.likelihood.noise_covar.raw_noise.requires_grad_(False)  
+        self.train_likelihood = train_likelihood
+
+        if not self.train_likelihood:
+            self.likelihood.noise_covar.raw_noise.requires_grad_(False)  
 
         x, y = np_to_torch(x, y)
         self.model = ExactGPModel(x, y, kernel, self.likelihood)
+
+        self.model.eval()
+        self.likelihood.eval()
 
     def fit(self, x, y, **kwargs):
         x, y = np_to_torch(x, y)
 
         self.model.train()
-        #likelihood.train()
+        if self.train_likelihood:
+            self.likelihood.train()
 
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+
+        self.model.eval()
+        self.likelihood.eval()
 
         return training_loop(model=self.model, loss=mll, x=x, y=y, **kwargs)
 
     def predict_f(self, x, prior=False):
-        x = np_to_torch(x)
-
-        self.model.eval()
-        #likelihood.eval()
-
-        with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
-            #pred = self.likelihood(self.model(x)) # with likelihood
-            pred = self.model(x) # without likelihood
-
-        #return pred.mean, pred.covariance_matrix # use pred.variance for marginal variance
-        return pred
+        fdist, _ = self.predict_fdist(x, prior=prior)
+        return torch_to_numpy(fdist.mean)
 
     def sample_f(self, x, n_samp, prior=False):
+        fdist, _ = self.predict_fdist(x, prior=prior)
+        return torch_to_np(fdist.sample(sample_shape=torch.Size((n_samp,))))
+
+    def predict_fdist(self, x, prior=False):
         x = np_to_torch(x)
-
-        pred = self.predict_f(x, prior=prior)
-        return torch_to_np(pred.sample(sample_shape=torch.Size((n_samp,))))
-
-    def predict_k(self, x, prior=False):
-        x = np_to_torch(x)
-
-        # want to substitue learned kernel hyperparams...
-        #assert not prior # prior not working
-        return torch_to_np(self.model.covar_module(x).to_dense().detach())
-
-    def sample_k(self, x, n_samp, prior=False):
-        x = np_to_torch(x)
-
-        # can't be computed since only point estimate of hyperparameters
-        return torch_to_np(self.model.covar_module(x).to_dense().detach().unsqueeze(0).repeat(n_samp, 1, 1))
+        with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
+            self.model.eval()
+            self.likelihood.eval()
+            fdist = self.model(x)
+            ydist = self.likelihood(fdist)
+        return fdist, ydist
 
     def sample_fdist(self, x, n_samp, prior=False):
         x = np_to_torch(x)
         expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
+        return self.predict_fdist(expanded_x, prior=prior)
 
+    def predict_k(self, x, prior=False):
+        # what should this do if prior=True?
+        if prior:
+            print('WARNING: unclear how prior should perform... should it sample from prior?')
+        x = np_to_torch(x)
+        return torch_to_np(self.model.covar_module(x).to_dense().detach())
+
+    def sample_k(self, x, n_samp, prior=False):
+        # just repeats prediction (since hypers fixed)
+        if prior:
+            print('WARNING: unclear how prior should perform... should it sample from prior?')
+        x = np_to_torch(x)
+        
+        '''
+        expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
         with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
             self.model.eval()
-            fdist = self.model(expanded_x)
-            ydist = self.likelihood(fdist)
+            self.likelihood.eval()
+            k_samp = self.model.covar_module(expanded_x).to_dense().detach()
 
-        return fdist, ydist
+        return torch_to_np(k_samp)
+        '''
+        return torch_to_np(self.model.covar_module(x).to_dense().detach().unsqueeze(0).repeat(n_samp, 1, 1))
 
 
 class MCMCGP(object):
-    def __init__(self, kernel, x, y, noise_std):
+    def __init__(self, kernel, x, y, noise_std, train_likelihood=False):
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         self.likelihood.noise = noise_std**2
-        self.likelihood.noise_covar.raw_noise.requires_grad_(False)  
+        self.train_likelihood = train_likelihood
+
+        if not self.train_likelihood:
+            self.likelihood.noise_covar.raw_noise.requires_grad_(False)  
 
         x, y = np_to_torch(x, y)
         self.model = ExactGPModel(x, y, kernel, self.likelihood)
 
-        #self.model.covar_module.base_kernel.register_prior("lengthscale_prior", UniformPrior(0.01, 0.5), "lengthscale")
-        #self.model.covar_module.register_prior("outputscale_prior", UniformPrior(1, 2), "outputscale")
-
-    def fit(self, x, y, n_samp=100, n_warmup=10, verbose=False):
+    def fit(self, x, y, n_samp=100, n_warmup=10, verbose=False, **kwargs):
         x, y = np_to_torch(x, y)
+
+        self.model.train()
+        if self.train_likelihood:
+            self.likelihood.train()
 
         def pyro_model(x, y):
             with gpytorch.settings.fast_computations(False, False, False):
@@ -102,8 +119,12 @@ class MCMCGP(object):
         mcmc_run = MCMC(nuts_kernel, num_samples=n_samp, warmup_steps=n_warmup, disable_progbar=False)
         mcmc_run.run(x, y)
 
+        self.model.eval()
+        self.likelihood.eval()
+
         samples = mcmc_run.get_samples()
         self.model.pyro_load_from_samples(samples)
+        self.n_samp_stored = n_samp
         return samples
 
     def predict_f(self, x, prior=False):
@@ -111,56 +132,40 @@ class MCMCGP(object):
         #n_samp = 1000 if prior else self.mcmc_run.num_samples
         #samples = self.sample(n_samp=n_samp, prior=prior)
         pass
-        
 
     def sample_f(self, x, n_samp, prior=False):
-        x = np_to_torch(x)
-
-        #if not prior:
-        #    n_samp = min(n_samp, self.mcmc_run.num_samples)
-        #    model.pyro_load_from_samples(self.mcmc_run.get_samples())
-
-        expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
-
-        with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
-            self.model.eval()
-            output = self.model(expanded_x)
-
-        return torch_to_np(output.mean.detach()) # do we want to return mean or samples?
-        #return output.sample # to get samples from posterior
+        fdist, _ = self.predict_fdist(x, prior=prior)
+        return torch_to_np(fdist.sample(sample_shape=torch.Size((n_samp,))))
 
     def predict_k(self, x, prior=False):
         # would just be mean of samples
         pass
 
     def sample_k(self, x, n_samp, prior=False):
-        #assert not prior # prior not working
-        if prior:
-            print('WARNING: PRIOR NOT WORKING')
+        if not prior:
+            assert n_samp == self.n_samp_stored
         x = np_to_torch(x)
-
         expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
-        
         with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
             self.model.eval()
+            self.likelihood.eval()
             k_samp = self.model.covar_module(expanded_x).to_dense().detach()
 
         return torch_to_np(k_samp)
 
     def sample_fdist(self, x, n_samp, prior=False):
+        if not prior:
+            assert n_samp == self.n_samp_stored
         x = np_to_torch(x)
         expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
 
         with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
             self.model.eval()
+            self.likelihood.eval()
             fdist = self.model(expanded_x)
             ydist = self.likelihood(fdist)
 
         return fdist, ydist
-
-
-
-
 
 
 class ExactGPModel(gpytorch.models.ExactGP):
@@ -320,7 +325,7 @@ class FilteredGP(ExactGP):
 ##########
 
 
-def training_loop(model, loss, x, y, n_epochs=10, lr=0.1, verbose=True):
+def training_loop(model, loss, x, y, n_epochs=10, lr=0.1, verbose=True, **kwargs):
 
     # Find optimal model hyperparameters
     model.train()
