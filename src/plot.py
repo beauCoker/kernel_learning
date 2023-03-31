@@ -15,7 +15,7 @@ import seaborn as sns
 
 
 
-def plot_f(x, f_samp, n_samp_plot=None, ax=None):
+def plot_f(x, f_samp, n_samp_plot=None, color='tab:blue', ax=None):
     '''
     x: (n, 1)
     f_samp: (n_samp, n, 1)
@@ -26,12 +26,12 @@ def plot_f(x, f_samp, n_samp_plot=None, ax=None):
     f_mean = np.mean(f_samp, 0)
     f_std = np.std(f_samp, 0)
         
-    ax.plot(x, f_mean, color='tab:blue', label='model')
+    ax.plot(x, f_mean, color=color, label='model')
     ax.fill_between(x.reshape(-1), 
             f_mean.reshape(-1) - 2*f_std.reshape(-1),
-            f_mean.reshape(-1) + 2*f_std.reshape(-1), color='tab:blue', alpha=.4)
+            f_mean.reshape(-1) + 2*f_std.reshape(-1), color=color, alpha=.4)
     
     if n_samp_plot is not None:
-        ax.plot(x, f_samp[:n_samp_plot,:,0].T, color='tab:blue', alpha=.4)
+        ax.plot(x, f_samp[:n_samp_plot,:,0].T, color=color, alpha=.4)
         
     return ax 

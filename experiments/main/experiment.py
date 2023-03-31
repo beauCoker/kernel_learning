@@ -23,25 +23,27 @@ from src.metrics import *
 
 
 CONFIG_DEFAULT = {
-    'ds_name': 'GPgrid',
-    'ds_n_train': 40,
+    'ds_name': 'GP',
+    'ds_n_train': 80,
     'ds_kern_name': 'matern32',
     'ds_kern_ls': 1.0,
     'ds_kern_var': 1.0,
-    'ds_seed': 4,
+    'ds_seed': 0,
     'ds_seed_split': 1,
-    'm_name': 'mcmc_gp',
+    'm_name': 'exact_gp',
     'm_kern_name': 'matern12',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
     'm_kern_ls_prior': 'gamma',
     'opt_n_samp': 100, # prior and posterior samples (for predictives and mcmc)
+    'opt_n_epochs': 100,
     'noise_std': .01,
     'dim_in': 1,
+    'train': True,
 }
 #'noise_std': 'true'
-TESTRUN = True
+TESTRUN = False
 ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
@@ -68,24 +70,22 @@ def main():
     # load data
     ds = load_dataset(**config_ds)
     ds = ds_astype(ds, np.float64)
+    splits = [split for split in ds.keys() if split != 'info'] # i.e. train, test, grid
 
     # define model
     model = make_model(ds, **config_m)
     model.model.double()
 
     # train
-    model.fit(x=ds['train']['x'], y=ds['train']['y'], **config_opt)
+    if config_exp['train']:
+        model.fit(x=ds['train']['x'], y=ds['train']['y'], **config_opt)
 
     res = {}
-    for cond in ['prior', 'post']: # better name?
+    for cond in ['prior', 'post']:
         res[cond] = {}
 
-        for split in ['train','test','grid']:
+        for split in splits:
             res_ = {}
-
-            # only evaluate on grid if dim_in==1
-            if split=='grid' and config_exp['dim_in']!=1:
-                continue
 
             # sample
 
@@ -165,6 +165,8 @@ def main():
                 plot.plot_f(x=ds['grid']['x'], f_samp=np.expand_dims(f_samp, -1), n_samp_plot=5, ax=ax)
                 ax.scatter(ds['train']['x'], ds['train']['y'], label='train')
                 ax.scatter(ds['test']['x'], ds['test']['y'], label='test', alpha=.2)
+                if 'ood' in ds.keys():
+                    ax.scatter(ds['ood']['x'], ds['ood']['y'], label='test_OOD', alpha=.2)
                 file_name = 'f_%s_%s' % (cond, split)
                 
                 if TESTRUN:
@@ -175,13 +177,21 @@ def main():
 
     # metrics that depend on prior and posterior
     for cond in ['prior', 'post']:
-        for split in ['train','test','grid']:
+        for split in splits:
             for dist in ['fdist','ydist']:
                 for avg in ['error', 'risk']:
                     if 'trace' in ARGS['fdist_metrics']:
                         prefix = '_'.join([dist,avg,'']) 
                         res[cond][split][prefix + 'contract'] = res['prior'][split][prefix + 'trace'] - res[cond][split][prefix + 'trace']
-                
+           
+    # metrics that don't depend on x
+    for cond in ['prior', 'post']:
+        samples = model.sample_k_hypers(n_samp=config_opt['n_samp'], prior=cond=='prior')
+        for key, val in samples.items():
+            res[cond][key+'_err'] = compute_error(sq_err, ds['info'][key], np.mean(val)).item()
+            res[cond][key+'_err'] = compute_risk(sq_err, ds['info'][key], val).item()
+   
+
     # to flat for wandb
     if not TESTRUN:
         res_flat = to_flat_dict({}, res)
@@ -190,8 +200,7 @@ def main():
 
     print(res)
     print('Posterior:')
-    print(pd.DataFrame({k:v for k,v in res['post'].items() if k in ('train', 'test')}))
-
+    print(pd.DataFrame({k:v for k,v in res['post'].items() if k in splits}))
 
 if __name__ == '__main__':
     main()

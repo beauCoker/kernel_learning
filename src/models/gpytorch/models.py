@@ -71,6 +71,24 @@ class ExactGP(object):
         x = np_to_torch(x)
         return torch_to_np(self.model.covar_module(x).to_dense().detach())
 
+    def sample_k_hypers(self, n_samp, prior=False):
+        print('WARNING: THIS CODE IS HACKED, COULD BREAK')
+        samples = {}
+
+        if prior:
+            samples['base_kernel.lengthscale_prior'] = self.model.covar_module.base_kernel.lengthscale_prior.sample(torch.Size((n_samp,)))
+            samples['outputscale_prior'] = self.model.covar_module.outputscale_prior.sample(torch.Size((n_samp,)))
+        else:
+            samples['base_kernel.lengthscale_prior'] = self.model.covar_module.base_kernel.lengthscale.detach().reshape(-1).repeat(n_samp)
+            samples['outputscale_prior'] =  self.model.covar_module.outputscale.detach().repeat(n_samp)
+        
+        # format
+        samples_out = {}
+        for key, val in samples.items():
+            samples_out[key] = torch_to_np(val)
+
+        return samples_out
+
     def sample_k(self, x, n_samp, prior=False):
         # just repeats prediction (since hypers fixed)
         if prior:
@@ -122,10 +140,10 @@ class MCMCGP(object):
         self.model.eval()
         self.likelihood.eval()
 
-        samples = mcmc_run.get_samples()
-        self.model.pyro_load_from_samples(samples)
+        self.samples = mcmc_run.get_samples()
+        self.model.pyro_load_from_samples(self.samples)
         self.n_samp_stored = n_samp
-        return samples
+        return self.samples
 
     def predict_f(self, x, prior=False):
         # based on samples
@@ -152,6 +170,24 @@ class MCMCGP(object):
             k_samp = self.model.covar_module(expanded_x).to_dense().detach()
 
         return torch_to_np(k_samp)
+
+    def sample_k_hypers(self, n_samp, prior=False):
+        assert n_samp == self.n_samp_stored
+        if prior:
+            samples = {}
+            for key in self.samples.keys():
+                prior = eval('self.model.' + key)
+                samples[key] = prior.sample(torch.Size((n_samp,)))
+        else:
+            samples = self.samples
+
+        # format
+        samples_out = {}
+        for key, val in samples.items():
+            prior_name = '.'.join(key.split('.')[1:])
+            samples_out[prior_name] = torch_to_np(val)
+
+        return samples_out
 
     def sample_fdist(self, x, n_samp, prior=False):
         if not prior:
