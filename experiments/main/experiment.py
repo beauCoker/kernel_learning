@@ -30,7 +30,7 @@ CONFIG_DEFAULT = {
     'ds_kern_var': 1.0,
     'ds_seed': 0,
     'ds_seed_split': 1,
-    'm_name': 'exact_gp',
+    'm_name': 'numpyro_bnn',
     'm_kern_name': 'matern12',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
@@ -38,12 +38,13 @@ CONFIG_DEFAULT = {
     'm_kern_ls_prior': 'gamma',
     'opt_n_samp': 100, # prior and posterior samples (for predictives and mcmc)
     'opt_n_epochs': 100,
+    'opt_lr': .01,
     'noise_std': .01,
     'dim_in': 1,
     'train': True,
 }
 #'noise_std': 'true'
-TESTRUN = False
+TESTRUN = True
 ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
@@ -74,7 +75,7 @@ def main():
 
     # define model
     model = make_model(ds, **config_m)
-    model.model.double()
+    #model.model.double()
 
     # train
     if config_exp['train']:
@@ -113,15 +114,16 @@ def main():
                 fdist, f_samp_mean, f_samp_cov = None, None, None
                 ydist, y_samp_mean, y_samp_cov = None, None, None
 
-                f_samp, y_samp = model.sample_f(ds[split]['x'], n_samp=n_samp, prior=cond=='prior').detach().numpy() # SxN
-
+                f_samp, y_samp = model.sample_f(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior') # SxN
+                
                 # f
                 f_mean = np.mean(f_samp, 0) # N
-                f_cov = np.cov(f_samp, 0) # NxN
+                f_cov = np.cov(f_samp.T) # NxN
 
                 # y
                 y_mean = np.mean(y_samp, 0) # N
-                y_cov = np.cov(y_samp, 0) # NxN
+                y_cov = np.cov(y_samp.T) # NxN
+
 
             # k samples
             k_samp = model.sample_k(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
@@ -182,14 +184,20 @@ def main():
                 for avg in ['error', 'risk']:
                     if 'trace' in ARGS['fdist_metrics']:
                         prefix = '_'.join([dist,avg,'']) 
-                        res[cond][split][prefix + 'contract'] = res['prior'][split][prefix + 'trace'] - res[cond][split][prefix + 'trace']
+
+                        if avg=='risk' and f_samp_mean is not None and f_samp_cov is not None:
+                            res[cond][split][prefix + 'contract'] = res['prior'][split][prefix + 'trace'] - res[cond][split][prefix + 'trace']
            
     # metrics that don't depend on x
     for cond in ['prior', 'post']:
-        samples = model.sample_k_hypers(n_samp=config_opt['n_samp'], prior=cond=='prior')
-        for key, val in samples.items():
-            res[cond][key+'_err'] = compute_error(sq_err, ds['info'][key], np.mean(val)).item()
-            res[cond][key+'_err'] = compute_risk(sq_err, ds['info'][key], val).item()
+
+        try:
+            samples = model.sample_k_hypers(n_samp=config_opt['n_samp'], prior=cond=='prior')
+            for key, val in samples.items():
+                res[cond][key+'_err'] = compute_error(sq_err, ds['info'][key], np.mean(val)).item()
+                res[cond][key+'_err'] = compute_risk(sq_err, ds['info'][key], val).item()
+        except:
+            print('WARNING: unable to access kernel hyperparameters')
    
 
     # to flat for wandb

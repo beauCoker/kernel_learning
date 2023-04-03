@@ -368,7 +368,7 @@ def training_loop(model, loss, x, y, n_epochs=10, lr=0.1, verbose=True, **kwargs
     #likelihood.train()
 
     # Use the adam optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)    
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     for i in range(n_epochs):
 
