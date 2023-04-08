@@ -73,4 +73,5 @@ def transfer_args(args_list, config_base, *configs):
     '''
     for arg in args_list:
         for config in configs:
-            config[arg] = config_base[arg]    
+            config[arg] = config_base[arg]
+

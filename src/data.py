@@ -10,9 +10,12 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 # local imports
-from .models.gpytorch.kernels import make_kernel
-from .models.gpytorch.models import ExactGP
 from .util import *
+
+from .models.gpytorch.kernels import make_kernel
+from .models.gpytorch.util import make_gaussian_likelihood
+from .models.gpytorch.std_gp import StandardGP
+from .models.gpytorch.models import LMLGP
 
 #BASEDIR = '../../data/'
 
@@ -74,8 +77,9 @@ def gen_gp_dataset(n_train, n_test, dim_in, noise_std, n_ood=100, n_grid=100, se
         x = np.concatenate([x, np.linspace(-1.5, 1.5, n_grid).reshape(-1,1)], axis=0)
 
     kernel = make_kernel(**kwargs_kern)
-    model = ExactGP(kernel, x=torch.tensor([]), y=torch.tensor([]), noise_std=1.0)
-    model.model.double()
+    likelihood = make_gaussian_likelihood(noise_std=1.0)
+    gp = StandardGP(torch.tensor([]), torch.tensor([]), kernel, likelihood)
+    model = LMLGP(gp)
 
     # function
     f = model.sample_f(x, n_samp=1, prior=True)[0, ...]
@@ -121,9 +125,9 @@ def gen_gp_dataset(n_train, n_test, dim_in, noise_std, n_ood=100, n_grid=100, se
     ds['info']['noise_std'] = noise_std
     #for name, param in kernel.named_hyperparameters():
     #    ds['info'][name] = param.item()
-    print('WARNING: THIS WILL BREAK FOR OTHER KERNELS')
-    ds['info']['base_kernel.lengthscale_prior'] = kernel.base_kernel.lengthscale.item()
-    ds['info']['outputscale_prior'] = kernel.outputscale.item()
+    #print('WARNING: THIS WILL BREAK FOR OTHER KERNELS')
+    #ds['info']['base_kernel.lengthscale_prior'] = kernel.base_kernel.lengthscale.item()
+    #ds['info']['outputscale_prior'] = kernel.outputscale.item()
 
     return ds
 
@@ -184,8 +188,9 @@ def gen_gp_grid_dataset(n_train, dim_in, noise_std, n_grid=90, seed=None, seed_s
     x_test = x[idx_test]
 
     kernel = make_kernel(**kwargs_kern)
-    model = ExactGP(kernel, x=torch.tensor([]), y=torch.tensor([]), noise_std=1.0)
-    model.model.double()
+    likelihood = make_gaussian_likelihood(noise_std=1.0)
+    gp = StandardGP(torch.tensor([]), torch.tensor([]), kernel, likelihood)
+    model = LMLGP(gp)
 
     # function
     f = model.sample_f(x, n_samp=1, prior=True)[0, ...]

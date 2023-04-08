@@ -52,8 +52,8 @@ def make_kernel(**kwargs):
 
 def make_prior(name):
     if name == 'uniform':
-        prior = gpytorch.priors.UniformPrior(.1, 10)
-        constraint = gpytorch.constraints.Interval(.1, 10)
+        prior = gpytorch.priors.UniformPrior(1,2)
+        constraint = gpytorch.constraints.Interval(1,2)
 
     elif name == 'gamma':
         prior = gpytorch.priors.GammaPrior(.1, .1)
@@ -63,4 +63,10 @@ def make_prior(name):
         raise ValueError('Prior not found')
 
     return prior, constraint
+
+
+
+
+
+
 

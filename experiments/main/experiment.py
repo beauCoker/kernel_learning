@@ -20,23 +20,25 @@ import src.plot as plot
 from src.wandb import fig2img
 from src.util import *
 from src.metrics import *
+import src.models.gpytorch.util as util_gpytorch
 
 
 CONFIG_DEFAULT = {
     'ds_name': 'GP',
-    'ds_n_train': 80,
+    'ds_n_train': 20,
     'ds_kern_name': 'matern32',
     'ds_kern_ls': 1.0,
     'ds_kern_var': 1.0,
     'ds_seed': 0,
     'ds_seed_split': 1,
-    'm_name': 'numpyro_bnn',
-    'm_kern_name': 'matern12',
+    'm_name': 'std_gp',
+    'm_kern_name': 'matern52',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
     'm_kern_ls_prior': 'gamma',
-    'opt_n_samp': 100, # prior and posterior samples (for predictives and mcmc)
+    'm_inference': 'lml',
+    'opt_n_samp': 10, # prior and posterior samples (for predictives and mcmc)
     'opt_n_epochs': 100,
     'opt_lr': .01,
     'noise_std': .01,
@@ -51,6 +53,8 @@ ARGS ={
     'k_metrics': {'fro': fro_err, 'align': align_err},
     'fdist_metrics': {'nlpd': nlpd_err, 'diagnlpd': diagnlpd_err, 'trace': trace_of_cov} # applyed to f and y distributions
 }
+
+torch.set_default_dtype(torch.float64)
 
 def main():
     if not TESTRUN:
@@ -75,7 +79,6 @@ def main():
 
     # define model
     model = make_model(ds, **config_m)
-    #model.model.double()
 
     # train
     if config_exp['train']:
@@ -85,49 +88,32 @@ def main():
     for cond in ['prior', 'post']:
         res[cond] = {}
 
+        # things that don't depend on split
+        if config_m['inference'] == 'lml':
+
+            # lengthscale
+            if config_m['name'] == 'dkl_gp':
+                print('WARNING: EXPECTED UPCROSS NOT RECOMMENDED FOR DKL')
+                # to fix for DKL, need it to use forward sample
+            res[cond]['upcross'] = util_gpytorch.expected_upcrossings(model.gp.covar_module)
+
+            # smoothness
+            dist = torch.distributions.uniform.Uniform(0, 1)
+            x = dist.sample(torch.Size((1000,config['dim_in'])))
+            k_samp, k_mean = get_k_samples(model, x, n_samp=config_opt['n_samp'], prior=cond=='prior')
+            res[cond]['smooth'] = util_gpytorch.estimate_eigenvalue_decay(K=k_mean,n=1000)
+        else:
+            print('ONLY WORKS FOR LML FOR NOW')
+
+        # things that do depend on split
         for split in splits:
             res_ = {}
 
-            # sample
-
             # f and y samples
-            if hasattr(model, 'sample_fdist'):
-                fdist, ydist = model.sample_fdist(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
-                
-                # f
-                f_samp = fdist.sample().detach().numpy() # SxN
-                f_samp_mean = fdist.mean.detach().numpy() # SxN
-                f_samp_cov = fdist.covariance_matrix.detach().numpy() # SxNxN
-
-                f_mean = np.mean(f_samp_mean, 0) # N
-                f_cov = np.mean(f_samp_cov, 0) # NxN
-
-                # y
-                y_samp = ydist.sample().detach().numpy() # SxN
-                y_samp_mean = ydist.mean.detach().numpy() # SxN
-                y_samp_cov = ydist.covariance_matrix.detach().numpy() # SxNxN
-
-                y_mean = np.mean(y_samp_mean, 0) # N
-                y_cov = np.mean(y_samp_cov, 0) # NxN
-
-            else:
-                fdist, f_samp_mean, f_samp_cov = None, None, None
-                ydist, y_samp_mean, y_samp_cov = None, None, None
-
-                f_samp, y_samp = model.sample_f(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior') # SxN
-                
-                # f
-                f_mean = np.mean(f_samp, 0) # N
-                f_cov = np.cov(f_samp.T) # NxN
-
-                # y
-                y_mean = np.mean(y_samp, 0) # N
-                y_cov = np.cov(y_samp.T) # NxN
-
+            (f_samp, f_mean, f_cov, f_samp_mean, f_samp_cov), (y_samp, y_mean, y_cov, y_samp_mean, y_samp_cov) = get_fy_samples(model, ds[split]['x'], config_opt['n_samp'], prior=cond=='prior')
 
             # k samples
-            k_samp = model.sample_k(ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
-            k_mean = np.mean(k_samp, 0)
+            k_samp, k_mean = get_k_samples(model, ds[split]['x'], n_samp=config_opt['n_samp'], prior=cond=='prior')
 
             # metrics
 
@@ -155,7 +141,8 @@ def main():
             ## k
             for metric_name, metric in ARGS['k_metrics'].items():
                 res_['k_error_' + metric_name] = compute_error(metric, ds[split]['k'], k_mean).item()
-                res_['k_risk_' + metric_name] = compute_risk(metric, ds[split]['k'], k_samp).item()
+                if k_samp is not None:
+                    res_['k_risk_' + metric_name] = compute_risk(metric, ds[split]['k'], k_samp).item()
 
             res[cond][split] = res_
 
@@ -189,6 +176,7 @@ def main():
                             res[cond][split][prefix + 'contract'] = res['prior'][split][prefix + 'trace'] - res[cond][split][prefix + 'trace']
            
     # metrics that don't depend on x
+    '''
     for cond in ['prior', 'post']:
 
         try:
@@ -198,7 +186,14 @@ def main():
                 res[cond][key+'_err'] = compute_risk(sq_err, ds['info'][key], val).item()
         except:
             print('WARNING: unable to access kernel hyperparameters')
-   
+    '''
+
+
+    hyperparams = util_gpytorch.get_hyperparams(model.gp.covar_module)
+    for key,val in hyperparams.items():
+        res[key+'_mean'] = np.mean(val)
+        res[key+'_var'] = np.var(val)
+
 
     # to flat for wandb
     if not TESTRUN:
@@ -209,6 +204,104 @@ def main():
     print(res)
     print('Posterior:')
     print(pd.DataFrame({k:v for k,v in res['post'].items() if k in splits}))
+
+
+def get_k_samples(model, x, n_samp, prior=False):
+    if hasattr(model, 'sample_k'):
+        k_samp = model.sample_k(x, n_samp=n_samp, prior=prior)
+        k_mean = np.mean(k_samp, 0)
+
+    elif hasattr(model, 'predict_k'):
+        k_samp = None
+        k_mean = model.predict_k(x, prior=prior)
+
+    # check
+    n_obs = x.shape[0]
+    check(k_mean, (n_obs, n_obs))
+    if k_samp is not None:
+        check(k_samp, (n_samp, n_obs, n_obs))
+
+    return k_samp, k_mean
+
+
+def get_fy_samples(model, x, n_samp, prior=False):
+
+    # only returned for methods with sample_fy_dist
+    f_samp_mean, f_samp_cov = None, None
+    y_samp_mean, y_samp_cov = None, None
+
+    # f and y samples
+    if hasattr(model, 'sample_fy_dist'):
+        fdist, ydist = model.sample_fy_dist(x, n_samp=n_samp, prior=prior)
+        
+        # f
+        f_samp = fdist.sample().detach().numpy() # SxN
+        f_samp_mean = fdist.mean.detach().numpy() # SxN
+        f_samp_cov = fdist.covariance_matrix.detach().numpy() # SxNxN
+
+        f_mean = np.mean(f_samp_mean, 0) # N
+        f_cov = np.mean(f_samp_cov, 0) # NxN
+
+        # y
+        y_samp = ydist.sample().detach().numpy() # SxN
+        y_samp_mean = ydist.mean.detach().numpy() # SxN
+        y_samp_cov = ydist.covariance_matrix.detach().numpy() # SxNxN
+
+        y_mean = np.mean(y_samp_mean, 0) # N
+        y_cov = np.mean(y_samp_cov, 0) # NxN
+
+    elif hasattr(model, 'predict_fy_dist'):
+        fdist, ydist = model.predict_fy_dist(x, prior=prior)
+        f_mean = fdist.mean.detach().numpy() # N
+        f_cov = fdist.covariance_matrix.detach().numpy() # NxN
+        f_samp = fdist.sample(torch.Size((n_samp,))).numpy() # SxN
+
+        y_mean = ydist.mean.detach().numpy() # N
+        y_cov = ydist.covariance_matrix.detach().numpy() # NxN
+        y_samp = ydist.sample(torch.Size((n_samp,))).numpy()
+
+
+    elif hasattr(model, 'sample_fy'):
+        fdist, f_samp_mean, f_samp_cov = None, None, None
+        ydist, y_samp_mean, y_samp_cov = None, None, None
+
+        f_samp, y_samp = model.sample_f(x, n_samp=n_samp, prior=prior) # SxN
+        
+        # f
+        f_mean = np.mean(f_samp, 0) # N
+        f_cov = np.cov(f_samp.T) # NxN
+
+        # y
+        y_mean = np.mean(y_samp, 0) # N
+        y_cov = np.cov(y_samp.T) # NxN
+
+    # check shapes
+    n_obs = x.shape[0]
+
+    ## f
+    check(f_samp, (n_samp, n_obs))
+    check(f_mean, (n_obs,))
+    check(f_cov, (n_obs, n_obs))
+    if f_samp_mean is not None:
+        check(f_samp_mean, (n_samp, n_obs))
+    if f_samp_cov is not None:
+        check(f_samp_cov, (n_samp, n_obs, n_obs))
+
+    ## y
+    check(y_samp, (n_samp, n_obs))
+    check(y_mean, (n_obs,))
+    check(y_cov, (n_obs, n_obs))
+    if y_samp_mean is not None:
+        check(y_samp_mean, (n_samp, n_obs))
+    if y_samp_cov is not None:
+        check(y_samp_cov, (n_samp, n_obs, n_obs))
+
+    return (f_samp, f_mean, f_cov, f_samp_mean, f_samp_cov), (y_samp, y_mean, y_cov, y_samp_mean, y_samp_cov)
+
+def check(arr, shape, instance=np.ndarray):
+    assert arr.shape == shape
+    assert isinstance(arr, instance)
+
 
 if __name__ == '__main__':
     main()
