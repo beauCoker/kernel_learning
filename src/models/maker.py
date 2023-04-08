@@ -6,71 +6,62 @@ import inspect
 
 # package imports
 import numpy as np
-
-# local imports
-from .gpytorch import models as models_gpytorch
-from .gpytorch import models_DKL as models_gpytorch_dkl
-from .gpytorch import models_MKL as models_gpytorch_mkl
-from .gpytorch import kernels
-
 from .pyro import models as models_pyro
 from .numpyro import models as models_numpyro
+
+# local imports
+from .gpytorch import models as gp_models
+from .gpytorch import kernels
+from .gpytorch.std_gp import StandardGP
+from .gpytorch.mkl_gp import MKLGP
+from .gpytorch.dkl_gp import DKLGP
+from .gpytorch.filtered_gp import FilteredGP
+from .gpytorch.st_gp import STGP_LML, STGP_MCMC
+from .gpytorch.util import make_gaussian_likelihood
+
 from ..util import *
 
 def make_model(ds, **kwargs):
+    x = np_to_torch(ds['train']['x'])
+    y = np_to_torch(ds['train']['y'])
+    likelihood = make_gaussian_likelihood(kwargs['noise_std'])
 
-    kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
 
-    if kwargs['name'] == 'exact_gp':
+    if kwargs['name'] == 'std_gp':
 
+        kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
         kernel = kernels.make_kernel(**kwargs_kern)
-
-        Model = models_gpytorch.ExactGP
-        a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
-        a['kernel'] = kernel
-
-        model = Model(x=ds['train']['x'], y=ds['train']['y'], **a)
+        gp = StandardGP(x, y, kernel, likelihood)
         
-    elif kwargs['name'] == 'mcmc_gp':
+    elif kwargs['name'] == 'mkl_gp':
+        kernel0 = kernels.make_kernel(**{'name': 'rbf', 'var_prior': 'gamma'})
+        kernel1 = kernels.make_kernel(**{'name': 'matern12', 'var_prior': 'gamma', 'ls_prior': 'gamma'})
+        kernel_list = [kernel0, kernel1]
 
-        kernel = kernels.make_kernel(**kwargs_kern)
+        gp = MKLGP(x, y, kernel_list, likelihood)
 
-        Model = models_gpytorch.MCMCGP
-        a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
-        a['kernel'] = kernel
-
-        model = Model(x=ds['train']['x'], y=ds['train']['y'], **a)
-
-    elif kwargs['name'] == 'filtered_gp':
-
-        kernel = kernels.make_kernel(**kwargs_kern)
-
-        Model = models_gpytorch.FilteredGPGrid
-        a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
-        a['kernel'] = kernel
-
-        model = Model(ds=ds, **a)
 
     elif kwargs['name'] == 'dkl_gp':
+        kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
         kernel = kernels.make_kernel(**kwargs_kern)
 
-        Model = models_gpytorch_dkl.MCMCDKLGP
-        a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
-        a['kernel'] = kernel
+        gp = DKLGP(x, y, kernel, likelihood)
 
-        model = Model(x=ds['train']['x'], y=ds['train']['y'], **a)
+    elif kwargs['name'] == 'filtered_gp':
+        kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
+        kernel = kernels.make_kernel(**kwargs_kern)
 
+        gp = FilteredGP(ds, kernel, likelihood)
 
-    elif kwargs['name'] == 'mkl_gp':
-        #kernel = kernels.make_kernel(**kwargs_kern)
-        kernel0 = kernels.make_kernel(**{'name': 'rbf'})
-        kernel1 = kernels.make_kernel(**{'name': 'matern12'})
+    elif kwargs['name'] == 'st_gp':
+        kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
+        kernel = kernels.make_kernel(**kwargs_kern)
+        kernel = kernel.base_kernel
 
-        Model = models_gpytorch_mkl.MKLGP
-        a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
-        a['kernels'] = [kernel0, kernel1]
-
-        model = Model(x=ds['train']['x'], y=ds['train']['y'], **a)
+        if kwargs['inference'] == 'lml':
+            gp = STGP_LML(x, y, nu=5, rho=3, kernel=kernel, noise_std=kwargs['noise_std'])
+        elif kwargs['inference'] == 'mcmc':
+            gp = STGP_MCMC(x, y, nu=5, rho=3, kernel=kernel, likelihood=likelihood)
 
     elif kwargs['name'] == 'bnn':
         Model = models_pyro.BNN
@@ -83,6 +74,19 @@ def make_model(ds, **kwargs):
 
         model = Model(architecture=[1,10,1], output_var=kwargs['noise_std'], w_prior_var=1.0)
 
+    else:
+        raise ValueError('Model not found')
+
+
+
+    if 'gp' in kwargs['name']:
+        if kwargs['inference'] == 'lml':
+            model = gp_models.LMLGP(gp)
+        elif kwargs['inference'] == 'mcmc':
+            model = gp_models.MCMCGP(gp)
+
+
+    #a = {k:v for k,v in kwargs.items() if k in inspect.getfullargspec(Model)[0]}
 
     return model
 
