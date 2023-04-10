@@ -46,18 +46,11 @@ class LMLGP(object):
         x, y = np_to_torch(x, y)
         self.gp.train()
 
-        ###
-        #out = self.gp(x)
-        #breakpoint()
-        #self.gp.ExactMarginalLogLikelihood2(out, y)
-        #mll(out, y)
-
         if hasattr(self.gp, 'ExactMarginalLogLikelihood'):
             mll = self.gp.ExactMarginalLogLikelihood
         else:
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
 
-        ###
         out = training_loop(model=self.gp, loss=mll, x=x, y=y, **kwargs)
         self.gp.eval()
         return out
@@ -84,17 +77,6 @@ class LMLGP(object):
             fdist = self.gp(x)
             ydist = self.gp.likelihood(fdist)
         return fdist, ydist
-
-    '''
-    @torch.no_grad()
-    def predict_k(self, x, prior=False):
-        x = np_to_torch(x)
-        # Shouldn't this use the forward pass of the network? e.g., for DKL
-        if prior:
-            return torch_to_np(self.covar_module_init(x).to_dense().detach())
-        else:
-            return torch_to_np(self.gp.covar_module(x).to_dense().detach())
-    '''
 
     @torch.no_grad()
     def predict_k(self, x, prior=False):
@@ -141,12 +123,6 @@ class MCMCGP(object):
         self.n_samp_stored = n_samp
         return self.samples
 
-    def predict_f(self, x, prior=False):
-        # based on samples
-        #n_samp = 1000 if prior else self.mcmc_run.num_samples
-        #samples = self.sample(n_samp=n_samp, prior=prior)
-        pass
-
     @torch.no_grad()
     def sample_f(self, x, n_samp, prior=False):
         fdist, _ = self.predict_fdist(x, prior=prior)
@@ -156,37 +132,6 @@ class MCMCGP(object):
     def predict_k(self, x, prior=False):
         # would just be mean of samples
         pass
-
-    @torch.no_grad()
-    def sample_k_old(self, x, n_samp, prior=False):
-        if not prior:
-            assert n_samp == self.n_samp_stored
-        x = np_to_torch(x)
-        expanded_x = x.unsqueeze(0).repeat(n_samp, 1, 1)
-        with torch.no_grad(),  gpytorch.settings.fast_pred_var(), gpytorch.settings.prior_mode(prior):
-            self.gp.eval()
-            self.gp.likelihood.eval()
-            k_samp = self.gp.covar_module(expanded_x).to_dense().detach()
-
-        return torch_to_np(k_samp)
-
-    '''
-    @torch.no_grad()
-    def sample_k(self, x, n_samp, prior=False):
-        x = np_to_torch(x)
-        breakpoint()
-        if prior:
-            # Need to run pyro_load_from_samples first. Just using expanded_x will only do a single hyperparam sample.
-            sampled_model = self.gp.pyro_sample_from_prior()
-            k_samp = sampled_model.covar_module(x).to_dense().detach()
-
-        else:
-            with torch.no_grad(),  gpytorch.settings.fast_pred_var():
-                self.gp.eval()
-                k_samp = self.gp.covar_module(x).to_dense().detach()
-
-        return torch_to_np(k_samp )
-    '''
 
     @torch.no_grad()
     def sample_k(self, x, n_samp, prior=False):

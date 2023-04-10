@@ -32,7 +32,7 @@ CONFIG_DEFAULT = {
     'ds_seed': 0,
     'ds_seed_split': 1,
     'm_name': 'std_gp',
-    'm_kern_name': 'matern52',
+    'm_kern_name': 'arccos',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
@@ -43,10 +43,10 @@ CONFIG_DEFAULT = {
     'opt_lr': .01,
     'noise_std': .01,
     'dim_in': 1,
-    'train': True,
+    'train': False,
 }
 #'noise_std': 'true'
-TESTRUN = True
+TESTRUN = False
 ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
@@ -57,6 +57,7 @@ ARGS ={
 torch.set_default_dtype(torch.float64)
 
 def main():
+    print('hey')
     if not TESTRUN:
         wandb.init(project="", config=CONFIG_DEFAULT)
         config = wandb.config
@@ -164,7 +165,7 @@ def main():
                     wandb.log({file_name: wandb.Image(fig2img(fig))})
     
 
-    # metrics that depend on prior and posterior
+    # metrics that depend on prior AND posterior
     for cond in ['prior', 'post']:
         for split in splits:
             for dist in ['fdist','ydist']:
