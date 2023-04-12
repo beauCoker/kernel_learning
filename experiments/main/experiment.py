@@ -15,7 +15,7 @@ sys.path.append('../../')
 
 #from src.util.data import load_dataset
 from src.models.maker import make_model
-from src.data import load_dataset
+from src.data import load_dataset, ds_to_grid
 import src.plot as plot
 from src.wandb import fig2img
 from src.util import *
@@ -25,14 +25,14 @@ import src.models.gpytorch.util as util_gpytorch
 
 CONFIG_DEFAULT = {
     'ds_name': 'GP',
-    'ds_n_train': 20,
+    'ds_n_train': 40,
     'ds_kern_name': 'matern32',
     'ds_kern_ls': 1.0,
     'ds_kern_var': 1.0,
-    'ds_seed': 0,
+    'ds_seed': 3,
     'ds_seed_split': 1,
-    'm_name': 'std_gp',
-    'm_kern_name': 'arccos',
+    'm_name': 'mkl_gp',
+    'm_kern_name': 'rbf',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
@@ -43,10 +43,10 @@ CONFIG_DEFAULT = {
     'opt_lr': .01,
     'noise_std': .01,
     'dim_in': 1,
-    'train': False,
+    'train': True,
 }
 #'noise_std': 'true'
-TESTRUN = False
+TESTRUN = True
 ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
@@ -57,7 +57,6 @@ ARGS ={
 torch.set_default_dtype(torch.float64)
 
 def main():
-    print('hey')
     if not TESTRUN:
         wandb.init(project="", config=CONFIG_DEFAULT)
         config = wandb.config
@@ -77,9 +76,36 @@ def main():
     ds = load_dataset(**config_ds)
     ds = ds_astype(ds, np.float64)
     splits = [split for split in ds.keys() if split != 'info'] # i.e. train, test, grid
+    if config_m['name'] == 'filtered_gp':
+        ds = ds_to_grid(ds)
 
     # define model
     model = make_model(ds, **config_m)
+
+    ###
+    '''
+    from src.models.gpytorch.kernels import ArcCosine, ArcCosineLS, arc_cos
+    a1 = arc_cos(weight_variance=4)
+    k1 = a1.k(ds['train']['x'])
+
+    a2 = arc_cos(weight_variance=1)
+    k2 = a2.k(ds['train']['x']/(1/2))
+
+    with torch.no_grad():
+        aa1 = ArcCosine()
+        aa1.weight_variance = 4.0
+        aa1.bias_variance = 1.0
+        kk1 = aa1(np_to_torch(ds['train']['x'])).to_dense()
+
+        aa2 = ArcCosineLS()
+        aa2.lengthscale = 0.5
+        aa2.bias_variance = 1.0
+        kk2 = aa2(np_to_torch(ds['train']['x'])).to_dense()
+
+        breakpoint()
+
+    '''
+    ###
 
     # train
     if config_exp['train']:
@@ -90,7 +116,7 @@ def main():
         res[cond] = {}
 
         # things that don't depend on split
-        if config_m['inference'] == 'lml':
+        if config_m['inference'] == 'lml' and config_m['name']!='filtered_gp':
 
             # lengthscale
             if config_m['name'] == 'dkl_gp':
@@ -104,7 +130,7 @@ def main():
             k_samp, k_mean = get_k_samples(model, x, n_samp=config_opt['n_samp'], prior=cond=='prior')
             res[cond]['smooth'] = util_gpytorch.estimate_eigenvalue_decay(K=k_mean,n=1000)
         else:
-            print('ONLY WORKS FOR LML FOR NOW')
+            print('ONLY WORKS FOR LML FOR NOW AND NOT FILTERED_GP')
 
         # things that do depend on split
         for split in splits:
@@ -189,12 +215,17 @@ def main():
             print('WARNING: unable to access kernel hyperparameters')
     '''
 
-
+    # get hyperparameters
     hyperparams = util_gpytorch.get_hyperparams(model.gp.covar_module)
     for key,val in hyperparams.items():
         res[key+'_mean'] = np.mean(val)
         res[key+'_var'] = np.var(val)
 
+    ## manually get c hyperparameter since not part of covar_module
+    if config_m['name'] == 'filtered_gp':
+        c = model.gp.c.detach().numpy()
+        res['c_mean'] = np.mean(c)
+        res['c_var'] = np.var(c)
 
     # to flat for wandb
     if not TESTRUN:

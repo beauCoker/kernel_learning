@@ -168,6 +168,28 @@ def generate_x_ood(n_obs, dim_in, dist='uniform', s=1, rng=None):
 
     return x_ood
 
+def x_to_grid(x, x_grid):
+    diff = np.linalg.norm(np.expand_dims(x, axis=1) - np.expand_dims(x_grid, axis=0), axis=-1)
+    idx_x_in_grid = np.argmin(diff, axis=-1).squeeze()
+    return x_grid[idx_x_in_grid, :], idx_x_in_grid
+
+
+def ds_to_grid(ds):
+    x, idx = x_to_grid(ds['train']['x'], ds['grid']['x'])
+    ds['train']['x'] = x
+    ds['info']['idx_train'] = idx
+
+    x, idx = x_to_grid(ds['test']['x'], ds['grid']['x'])
+    ds['test']['x'] = x
+    ds['info']['idx_test'] = idx
+
+    x, idx = x_to_grid(ds['ood']['x'], ds['grid']['x'])
+    ds['ood']['x'] = x
+    ds['info']['idx_ood'] = idx
+
+    ds['info']['idx_grid'] = np.arange(ds['grid']['x'].shape[0])
+
+    return ds
 
 def gen_gp_grid_dataset(n_train, dim_in, noise_std, n_grid=90, seed=None, seed_split=None, kwargs_kern={}):
     assert dim_in==1

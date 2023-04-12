@@ -51,7 +51,8 @@ def make_model(ds, **kwargs):
         kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
         kernel = kernels.make_kernel(**kwargs_kern)
 
-        gp = FilteredGP(ds, kernel, likelihood)
+        c_init = kwargs['c'] if 'c' in kwargs else 0.0
+        gp = FilteredGP(ds, kernel, likelihood, c_init=c_init)
 
     elif kwargs['name'] == 'st_gp':
         kwargs_kern, kwargs = parse_config(kwargs, 'kern_')

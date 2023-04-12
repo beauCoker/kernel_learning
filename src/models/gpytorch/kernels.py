@@ -50,6 +50,9 @@ def make_kernel(**kwargs):
     elif kwargs['name'] == 'arccos':
         kernel = ArcCosine()
 
+    elif kwargs['name'] == 'arccosls':
+        kernel = ArcCosineLS()
+
     # always add variance
     kernel = gpytorch.kernels.ScaleKernel(kernel,  outputscale_prior=var_prior, outputscale_constraint=var_constraint)
 
@@ -61,7 +64,7 @@ def make_kernel(**kwargs):
         kernel.outputscale = kwargs['var']
 
     if 'alpha' in kwargs:
-        kernel.base_kernel.lengthscale = kwargs['alpha']
+        kernel.base_kernel.lengthscale = kwargs['alpha'] # for RQKernel
 
     return kernel
 
@@ -80,25 +83,8 @@ def make_prior(name):
     return prior, constraint
 
 
-class SimpleSincKernel(gpytorch.kernels.Kernel):
-    has_lengthscale = True
-    is_stationary = False
 
-    # this is the kernel function
-    def forward(self, x1, x2, **params):
-        # apply lengthscale
-        x1_ = x1.div(self.lengthscale)
-        x2_ = x2.div(self.lengthscale)
-        # calculate the distance between inputs
-        diff = self.covar_dist(x1_, x2_, **params)
-        # prevent divide by 0 errors
-        diff.where(diff == 0, torch.as_tensor(1e-20))
-        # return sinc(diff) = sin(diff) / diff
-        return torch.sin(diff).div(diff)
-
-
-
-class ArcCosine(gpytorch.kernels.Kernel):
+class ArcCosineLS(gpytorch.kernels.Kernel):
     """
     The Arc-cosine family of kernels which mimics the computation in neural
     networks. The order parameter specifies the assumed activation function.
@@ -109,11 +95,12 @@ class ArcCosine(gpytorch.kernels.Kernel):
 
     implemented_orders = {0, 1, 2}
     is_stationary = False
-    has_lengthscale = False
+    has_lengthscale = True
 
     def __init__(
         self,
         order = 1,
+        has_lengthscale = True, 
         weight_variance_prior=None, weight_variance_constraint=None,
         bias_variance_prior=None, bias_variance_constraint=None,
         **kwargs
@@ -130,32 +117,21 @@ class ArcCosine(gpytorch.kernels.Kernel):
         :param active_dims: a slice or list specifying which columns of X are used
         """
         self.order = order
-
+        self.has_lengthscale = has_lengthscale
         super().__init__(**kwargs)
 
         # register the raw parameter
-        self.register_parameter(name='raw_weight_variance', parameter=torch.nn.Parameter(torch.zeros(1)))
         self.register_parameter(name='raw_bias_variance', parameter=torch.nn.Parameter(torch.zeros(1)))
 
         # set the parameter constraint to be positive, when nothing is specified
-        if weight_variance_constraint is None:
-            weight_variance_constraint = Positive()
         if bias_variance_constraint is None:
             bias_variance_constraint = Positive()
 
         # register the constraint
-        self.register_constraint("raw_weight_variance", weight_variance_constraint)
         self.register_constraint("raw_bias_variance", bias_variance_constraint)
 
         # set the parameter prior, see
         # https://docs.gpytorch.ai/en/latest/module.html#gpytorch.Module.register_prior
-        if weight_variance_prior is not None:
-            self.register_prior(
-                "weight_variance_prior",
-                weight_variance_prior,
-                lambda m: m.weight_variance,
-                lambda m, v : m._set_weight_variance(v),
-            )
         if bias_variance_prior is not None:
             self.register_prior(
                 "bias_variance_prior",
@@ -166,28 +142,13 @@ class ArcCosine(gpytorch.kernels.Kernel):
 
     # now set up the 'actual' paramter
     @property
-    def weight_variance(self):
-        # when accessing the parameter, apply the constraint transform
-        return self.raw_weight_variance_constraint.transform(self.raw_weight_variance)
-
-    @property
     def bias_variance(self):
         # when accessing the parameter, apply the constraint transform
         return self.raw_bias_variance_constraint.transform(self.raw_bias_variance)
 
-    @weight_variance.setter
-    def weight_variance(self, value):
-        return self._set_weight_variance(value)
-
     @bias_variance.setter
     def bias_variance(self, value):
         return self._set_bias_variance(value)
-
-    def _set_weight_variance(self, value):
-        if not torch.is_tensor(value):
-            value = torch.as_tensor(value).to(self.raw_weight_variance)
-        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
-        self.initialize(raw_weight_variance=self.raw_weight_variance_constraint.inverse_transform(value))
 
     def _set_bias_variance(self, value):
         if not torch.is_tensor(value):
@@ -196,18 +157,18 @@ class ArcCosine(gpytorch.kernels.Kernel):
         self.initialize(raw_bias_variance=self.raw_bias_variance_constraint.inverse_transform(value))
 
 
-    def _diag_weighted_product(self, X):
+    def _diag_weighted_product(self, X, weight_variance=None):
         #return tf.reduce_sum(self.weight_variance * tf.square(X), axis=-1) + self.bias_variance
-        return torch.sum(self.weight_variance * X**2, axis=-1) + self.bias_variance
+        return torch.sum(weight_variance * X**2, axis=-1) + self.bias_variance
 
 
-    def _full_weighted_product(self, X, X2=None):
+    def _full_weighted_product(self, X, X2=None, weight_variance=None):
         if X2 is None:
             #return tf.linalg.matmul((self.weight_variance * X), X, transpose_b=True) + self.bias_variance
-            return torch.matmul((self.weight_variance * X), torch.transpose(X, -1,-2)) + self.bias_variance
+            return torch.matmul((weight_variance * X), torch.transpose(X, -1,-2)) + self.bias_variance
         else:
             #return tf.linalg.matmul((self.weight_variance * X), X2, transpose_b=True) + self.bias_variance
-            return torch.matmul((self.weight_variance * X), torch.transpose(X2, -1,-2)) + self.bias_variance
+            return torch.matmul((weight_variance * X), torch.transpose(X2, -1,-2)) + self.bias_variance
 
     def _J(self, theta):
         """
@@ -225,13 +186,18 @@ class ArcCosine(gpytorch.kernels.Kernel):
             )
 
     def forward(self, X, X2, **params):
-        X_denominator = torch.sqrt(self._diag_weighted_product(X))
+        if self.has_lengthscale:
+            weight_variance = 1/self.lengthscale**2
+        else:
+            weight_variance = self.weight_variance
+
+        X_denominator = torch.sqrt(self._diag_weighted_product(X, weight_variance))
         if X2 is None:
             X2_denominator = X_denominator
-            numerator = self._full_weighted_product(X, None)
+            numerator = self._full_weighted_product(X, None, weight_variance)
         else:
-            X2_denominator = torch.sqrt(self._diag_weighted_product(X2))
-            numerator = self._full_weighted_product(X, X2)
+            X2_denominator = torch.sqrt(self._diag_weighted_product(X2, weight_variance))
+            numerator = self._full_weighted_product(X, X2, weight_variance)
         X_denominator = X_denominator.unsqueeze(-1)
         X2_denominator = X2_denominator.unsqueeze(-2)
 
@@ -282,5 +248,79 @@ class arc_cos:
         cos_theta = self._weighted_product(x, y)/x_norm/y_norm
         jitter = 1e-15
         theta = np.arccos(jitter + (1 - 2 * jitter) * cos_theta)
-    
-        return self.weight_variance*0.5/np.pi * x_norm * y_norm * (np.sin(theta) + (np.pi - theta) * np.cos(theta))+self.bias_variance
+        
+        # workshop version:
+        #return self.weight_variance*0.5/np.pi * x_norm * y_norm * (np.sin(theta) + (np.pi - theta) * np.cos(theta))+self.bias_variance
+
+        # gptorch version:
+        return 1.0/np.pi * x_norm * y_norm * (np.sin(theta) + (np.pi - theta) * np.cos(theta))
+
+
+
+class ArcCosine(ArcCosineLS):
+    """
+    The Arc-cosine family of kernels which mimics the computation in neural
+    networks. The order parameter specifies the assumed activation function.
+    The Multi Layer Perceptron (MLP) kernel is closely related to the ArcCosine
+    kernel of order 0.
+    The key reference is :cite:t:`NIPS2009_3628`.
+    """
+
+    implemented_orders = {0, 1, 2}
+    is_stationary = False
+
+    def __init__(
+        self,
+        weight_variance_prior=None, weight_variance_constraint=None,
+        **kwargs
+    ):
+        """
+        :param order: specifies the activation function of the neural network
+          the function is a rectified monomial of the chosen order
+        :param variance: the (initial) value for the variance parameter
+        :param weight_variance: the (initial) value for the weight_variance parameter,
+            to induce ARD behaviour this must be initialised as an array the same
+            length as the the number of active dimensions e.g. [1., 1., 1.]
+        :param bias_variance: the (initial) value for the bias_variance parameter
+            defaults to 1.0
+        :param active_dims: a slice or list specifying which columns of X are used
+        """
+        super().__init__(has_lengthscale=False, **kwargs)
+
+        # register the raw parameter
+        self.register_parameter(name='raw_weight_variance', parameter=torch.nn.Parameter(torch.zeros(1)))
+
+        # set the parameter constraint to be positive, when nothing is specified
+        if weight_variance_constraint is None:
+            weight_variance_constraint = Positive()
+
+        # register the constraint
+        self.register_constraint("raw_weight_variance", weight_variance_constraint)
+
+        # set the parameter prior, see
+        # https://docs.gpytorch.ai/en/latest/module.html#gpytorch.Module.register_prior
+        if weight_variance_prior is not None:
+            self.register_prior(
+                "weight_variance_prior",
+                weight_variance_prior,
+                lambda m: m.weight_variance,
+                lambda m, v : m._set_weight_variance(v),
+            )
+
+    # now set up the 'actual' paramter
+    @property
+    def weight_variance(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_weight_variance_constraint.transform(self.raw_weight_variance)
+
+    @weight_variance.setter
+    def weight_variance(self, value):
+        return self._set_weight_variance(value)
+
+    def _set_weight_variance(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_weight_variance)
+        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(raw_weight_variance=self.raw_weight_variance_constraint.inverse_transform(value))
+
+
