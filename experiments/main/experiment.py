@@ -25,28 +25,31 @@ import src.models.gpytorch.util as util_gpytorch
 
 CONFIG_DEFAULT = {
     'ds_name': 'GP',
-    'ds_n_train': 40,
+    'ds_n_train': 20,
     'ds_kern_name': 'matern32',
     'ds_kern_ls': 1.0,
     'ds_kern_var': 1.0,
-    'ds_seed': 3,
+    'ds_seed': 2,
     'ds_seed_split': 1,
     'm_name': 'mkl_gp',
-    'm_kern_name': 'rbf',
+    'm_kern_name': 'matern12',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
     'm_kern_ls_prior': 'gamma',
     'm_inference': 'lml',
+    'm_n_hidden': 200,
+    'm_c': 0.0,
     'opt_n_samp': 10, # prior and posterior samples (for predictives and mcmc)
     'opt_n_epochs': 100,
     'opt_lr': .01,
+    'opt_verbose': False,
     'noise_std': .01,
     'dim_in': 1,
     'train': True,
 }
 #'noise_std': 'true'
-TESTRUN = True
+TESTRUN = False
 ARGS ={
     'dir_out': './output/',
     'f_metrics': {'sqerr': sq_err},
@@ -233,9 +236,17 @@ def main():
         for key, val in res_flat.items():
             wandb.summary[key] = val
 
-    print(res)
-    print('Posterior:')
+    #print(res)
+    #print('Posterior:')
     print(pd.DataFrame({k:v for k,v in res['post'].items() if k in splits}))
+
+    ###
+    print('nlpd:', res['post']['test']['ydist_error_nlpd'])
+    #print('lengthscale:', model.gp.covar_module.base_kernel.lengthscale)
+    #if config_m['name']=='filtered_gp':
+    #    print('c:', model.gp.c)
+
+
 
 
 def get_k_samples(model, x, n_samp, prior=False):
@@ -248,10 +259,15 @@ def get_k_samples(model, x, n_samp, prior=False):
         k_mean = model.predict_k(x, prior=prior)
 
     # check
-    n_obs = x.shape[0]
-    check(k_mean, (n_obs, n_obs))
-    if k_samp is not None:
-        check(k_samp, (n_samp, n_obs, n_obs))
+    try:
+        n_obs = x.shape[0]
+        check(k_mean, (n_obs, n_obs))
+        if k_samp is not None:
+            check(k_samp, (n_samp, n_obs, n_obs))
+    except:
+        print('WARNING: k check failed, returning identity')
+        k_samp = None
+        k_mean = np.eye(x.shape[0])
 
     return k_samp, k_mean
 

@@ -36,16 +36,16 @@ class FilteredGP(gpytorch.models.ExactGP):
 
 
         self.version = 1
-        if self.version in [1,2]:
+        if self.version == 1:
             c_shape = (1,)
-        elif self.version == 3:
+        elif self.version == 2:
             c_shape = (self.grid_x.shape[0],)
 
-        self.register_parameter(name='raw_c', parameter=torch.nn.Parameter(c_init * torch.ones(c_shape)))
-        #if c_constraint is None:
-        #c_constraint = gpytorch.constraints.Positive()
-        c_constraint = gpytorch.constraints.GreaterThan(lower_bound=-10.0)
-        #c_constraint = None
+        c_constraint = gpytorch.constraints.GreaterThan(lower_bound=-20.0)
+        c_init_ = c_constraint.inverse_transform(c_init * torch.ones(c_shape))
+
+        self.register_parameter(name='raw_c', parameter=torch.nn.Parameter(c_init_))
+
         self.register_constraint("raw_c", c_constraint)
 
         #c_prior = None
@@ -57,8 +57,6 @@ class FilteredGP(gpytorch.models.ExactGP):
                 lambda m: m.c,
                 lambda m, v : m._set_c(v),
             )
-
-        self.c = c_init
 
         self.A = dct_matrix(self.grid_x.shape[0])
 
@@ -122,9 +120,6 @@ class FilteredGP(gpytorch.models.ExactGP):
                 c_diag = torch.arange(1,self.n_grid+1)**(-self.c) * torch.ones(self.n_grid)
 
             elif self.version==2:
-                pass
-
-            elif self.version==3:
                 c_diag = self.c 
 
             T = self.A.t() @ torch.diag(c_diag) @ self.A

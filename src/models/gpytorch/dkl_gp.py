@@ -3,6 +3,7 @@ import os
 import sys
 import pdb
 from functools import reduce
+import math
 
 # package imports
 import torch
@@ -15,7 +16,7 @@ class DKLGP(gpytorch.models.ExactGP):
     def __init__(self, x, y, kernel, likelihood, n_hidden=20):
         super().__init__(x, y, likelihood)
         self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        self.covar_module = kernel
         self.feature_extractor = LargeFeatureExtractor(dim_in=x.shape[-1], n_hidden=n_hidden)
 
         self.register_prior(
@@ -66,8 +67,13 @@ class DKLGP(gpytorch.models.ExactGP):
 from torch import Tensor
 import torch.nn.functional as F
 class Linear(torch.nn.Linear):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, scale_input_by_width, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        torch.nn.init.normal_(self.weight)
+        torch.nn.init.normal_(self.bias)
+
+        self.scale_input_by_width = scale_input_by_width
         
     def forward(self, input: Tensor) -> Tensor:
         '''
@@ -76,6 +82,9 @@ class Linear(torch.nn.Linear):
         elif input.dim()==3:
             return torch.sum(input.unsqueeze(2) * self.weight.unsqueeze(1), -1) + self.bias.unsqueeze(1)
         '''
+        if self.scale_input_by_width:
+            input = input/math.sqrt(self.weight.shape[-2])
+
         if self.weight.dim() == 2:
             return F.linear(input, self.weight, self.bias)
         elif self.weight.dim() == 3:
@@ -88,6 +97,6 @@ class Linear(torch.nn.Linear):
 class LargeFeatureExtractor(torch.nn.Sequential):
     def __init__(self, dim_in, n_hidden):
         super(LargeFeatureExtractor, self).__init__()
-        self.add_module('linear1', Linear(dim_in, n_hidden))
+        self.add_module('linear1', Linear(False, dim_in, n_hidden))
         self.add_module('relu1', torch.nn.ReLU())
-        self.add_module('linear2', Linear(n_hidden, 2))
+        self.add_module('linear2', Linear(True, n_hidden, 2))

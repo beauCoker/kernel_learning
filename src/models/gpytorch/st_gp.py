@@ -23,7 +23,7 @@ class GaussianLikelihoodForStudentT(gpytorch.likelihoods.GaussianLikelihood):
 class STGP_LML(gpytorch.models.ExactGP):
     '''
     '''
-    def __init__(self, x, y, nu, rho, kernel, noise_std):
+    def __init__(self, x, y, nu, kernel, noise_std):
         likelihood = GaussianLikelihoodForStudentT()
         #likelihood = gpytorch.likelihoods.GaussianLikelihood() # TEMP
         likelihood.noise = noise_std**2
@@ -33,10 +33,28 @@ class STGP_LML(gpytorch.models.ExactGP):
         self.mean_module = gpytorch.means.ConstantMean()
         self.covar_module = kernel
 
-        self.nu = torch.tensor(nu)
-        self.rho = torch.tensor(rho)
-        self.covar_module.r_inv = torch.nn.Parameter(torch.tensor(1.0))
+        nu_constraint = gpytorch.constraints.GreaterThan(lower_bound=2.0)
+        nu_init = nu_constraint.inverse_transform(nu * torch.ones(1))
+
+        self.register_parameter(name='raw_nu', parameter=torch.nn.Parameter(nu_init))
+        self.register_constraint("raw_nu", nu_constraint)
     
+
+    @property
+    def nu(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_nu_constraint.transform(self.raw_nu)
+
+    @nu.setter
+    def nu(self, value):
+        return self._set_nu(value)
+
+    def _set_nu(self, value):
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value).to(self.raw_nu)
+        # when setting the paramater, transform the actual value to a raw one by applying the inverse transform
+        self.initialize(raw_nu=self.raw_nu_constraint.inverse_transform(value))
+
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
@@ -57,7 +75,7 @@ class STGP_LML(gpytorch.models.ExactGP):
             m = self.mean_module(x)
             K = self.covar_module(x)
             L = torch.linalg.cholesky(K, upper=False)
-            out = MultivariateStudentT(self.nu.type(torch.float32), m.type(torch.float32), L.type(torch.float32))
+            out = MultivariateStudentT(self.nu.item(), m.type(torch.float32), L.type(torch.float32))
             #out = gpytorch.distributions.MultivariateNormal(m, K) # TEMP
         else:
             # for testing
@@ -103,8 +121,9 @@ class STGP_LML(gpytorch.models.ExactGP):
             
             #breakpoint()
             scale_tril_out = torch.linalg.cholesky(cov_out, upper=False)
-            out = MultivariateStudentT((nu + n1).type(torch.float32), mean_gp.reshape(-1).type(torch.float32), scale_tril_out.type(torch.float32))
+            out = MultivariateStudentT((nu + n1).item(), mean_gp.reshape(-1).type(torch.float32), scale_tril_out.type(torch.float32))
             #out = gpytorch.distributions.MultivariateNormal(mean_gp.reshape(-1), cov_gp) # TEMP
+
         return out
 
 

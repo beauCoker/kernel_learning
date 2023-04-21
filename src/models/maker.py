@@ -34,9 +34,18 @@ def make_model(ds, **kwargs):
         gp = StandardGP(x, y, kernel, likelihood)
         
     elif kwargs['name'] == 'mkl_gp':
-        kernel0 = kernels.make_kernel(**{'name': 'rbf', 'var_prior': 'gamma'})
-        kernel1 = kernels.make_kernel(**{'name': 'matern12', 'var_prior': 'gamma', 'ls_prior': 'gamma'})
-        kernel_list = [kernel0, kernel1]
+        #kernel0 = kernels.make_kernel(**{'name': 'rbf', 'var_prior': 'gamma'})
+        #kernel1 = kernels.make_kernel(**{'name': 'matern12', 'var_prior': 'gamma', 'ls_prior': 'gamma'})
+        #kernel_list = [kernel0, kernel1]
+
+        kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
+
+        kernel_list = []
+        for name in ["matern12", "matern32", "matern52", "rbf","poly1", "poly2", "poly3","arccosls"]:
+            kk = kwargs_kern.copy()
+            kk['name'] = name
+            kernel = kernels.make_kernel(**kk)
+            kernel_list.append(kernel)
 
         gp = MKLGP(x, y, kernel_list, likelihood)
 
@@ -45,7 +54,7 @@ def make_model(ds, **kwargs):
         kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
         kernel = kernels.make_kernel(**kwargs_kern)
 
-        gp = DKLGP(x, y, kernel, likelihood)
+        gp = DKLGP(x, y, kernel, likelihood, n_hidden=kwargs['n_hidden'])
 
     elif kwargs['name'] == 'filtered_gp':
         kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
@@ -57,10 +66,10 @@ def make_model(ds, **kwargs):
     elif kwargs['name'] == 'st_gp':
         kwargs_kern, kwargs = parse_config(kwargs, 'kern_')
         kernel = kernels.make_kernel(**kwargs_kern)
-        kernel = kernel.base_kernel
+        #kernel = kernel.base_kernel
 
         if kwargs['inference'] == 'lml':
-            gp = STGP_LML(x, y, nu=5, rho=3, kernel=kernel, noise_std=kwargs['noise_std'])
+            gp = STGP_LML(x, y, nu=5, kernel=kernel, noise_std=kwargs['noise_std'])
         elif kwargs['inference'] == 'mcmc':
             gp = STGP_MCMC(x, y, nu=5, rho=3, kernel=kernel, likelihood=likelihood)
 
