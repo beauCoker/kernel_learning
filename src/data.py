@@ -29,6 +29,7 @@ def load_dataset(**kwargs):
             n_train=kwargs['n_train'],
             n_test=100,
             dim_in=kwargs['dim_in'], 
+            x_dist=kwargs['x_dist'],
             noise_std=kwargs['noise_std'], 
             seed=kwargs['seed'], 
             seed_split=kwargs['seed_split'],
@@ -63,14 +64,14 @@ def train_test_split_dataset(variables, test_size=0.1, shuffle=True, seed=0):
     return ds
 
 
-def gen_gp_dataset(n_train, n_test, dim_in, noise_std, n_ood=100, n_grid=100, seed=None, seed_split=None, kwargs_kern={}):
+def gen_gp_dataset(n_train, n_test, dim_in, noise_std, x_dist='uniform', n_ood=100, n_grid=100, seed=None, seed_split=None, kwargs_kern={}):
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
     # inputs
     n_obs = n_train + n_test
-    x = generate_x(n_obs, dim_in, dist='uniform', rng=rng)
-    x_ood = generate_x_ood(n_ood, dim_in, dist='uniform', rng=rng)
+    x = generate_x(n_obs, dim_in, dist=x_dist, rng=rng)
+    x_ood = generate_x_ood(n_ood, dim_in, dist=x_dist, rng=rng)
 
     x = np.concatenate([x, x_ood], axis=0)
     if dim_in == 1:
@@ -141,6 +142,12 @@ def generate_x(n_obs, dim_in, dist='uniform', s=1, rng=None):
     elif dist=='normal':
         x = rng.normal(0, s, (n_obs, dim_in))
 
+    elif dist=='gap':
+        assert dim_in==1 
+        xl = rng.uniform(-s, -s*0.5, (int(n_obs/2), dim_in))
+        xr = rng.uniform(s*0.5, 1, (int((n_obs+1)/2), dim_in))
+        x = np.concatenate([xl, xr], axis=0)
+
     return x
 
 
@@ -157,6 +164,10 @@ def generate_x_ood(n_obs, dim_in, dist='uniform', s=1, rng=None):
 
         elif dist=='normal':
             idx_ood = np.linalg.norm(x, ord=1, axis=1) > s
+
+        elif dist=='gap':
+            x_ood = rng.uniform(-s*0.5, s*0.5, (n_obs, dim_in))
+            return x_ood
 
         x_ood = x[idx_ood, :]
         if x_ood.shape[0] >= n_obs:

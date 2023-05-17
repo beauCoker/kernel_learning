@@ -79,6 +79,8 @@ def training_loop(model, loss, x, y, n_epochs=10, lr=0.1, verbose=True, **kwargs
     # Use the adam optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    losses = torch.zeros(n_epochs)
+
     for i in range(n_epochs):
 
         # Zero gradients from previous iteration
@@ -94,6 +96,12 @@ def training_loop(model, loss, x, y, n_epochs=10, lr=0.1, verbose=True, **kwargs
         if verbose:
             print('Iter %d/%d - Loss: %.3f' % (i + 1, n_epochs, loss_value.item()))
         optimizer.step()
+
+        losses[i] = loss_value.item()
+
+    #print('final loss:', -loss(model(x), y).item())
+
+    return {'loss': losses.numpy()}
 
 def get_prior_hypers(model, n_samp):
     '''

@@ -25,14 +25,15 @@ import src.models.gpytorch.util as util_gpytorch
 
 CONFIG_DEFAULT = {
     'ds_name': 'GP',
-    'ds_n_train': 20,
-    'ds_kern_name': 'matern32',
-    'ds_kern_ls': 1.0,
+    'ds_n_train': 40,
+    'ds_kern_name': 'matern12',
+    'ds_kern_ls': 100,
     'ds_kern_var': 1.0,
-    'ds_seed': 2,
+    'ds_seed': 5,
     'ds_seed_split': 1,
-    'm_name': 'mkl_gp',
-    'm_kern_name': 'matern12',
+    'ds_x_dist': 'gap',
+    'm_name': 'std_gp',
+    'm_kern_name': 'matern52',
     'm_kern_ls': 1.0,
     'm_kern_var': 1.0,
     'm_kern_var_prior': 'gamma',
@@ -40,10 +41,13 @@ CONFIG_DEFAULT = {
     'm_inference': 'lml',
     'm_n_hidden': 200,
     'm_c': 0.0,
-    'opt_n_samp': 10, # prior and posterior samples (for predictives and mcmc)
-    'opt_n_epochs': 100,
+    'opt_n_samp': 1000, # prior and posterior samples (for predictives and mcmc)
+    'opt_n_epochs': 1000,
     'opt_lr': .01,
     'opt_verbose': False,
+    'opt_fix_ls': True,
+    'opt_fix_var': True,
+    'opt_fix_mean': True,
     'noise_std': .01,
     'dim_in': 1,
     'train': True,
@@ -110,9 +114,29 @@ def main():
     '''
     ###
 
+    ###
+    # fix lengthscale and variance
+    if config_opt['fix_ls']:
+        try:
+            model.gp.covar_module.base_kernel.raw_lengthscale.requires_grad_(False)
+        except:
+            print('Unable to fix lengthscale')
+
+    if config_opt['fix_var']:
+        try:
+            model.gp.covar_module.raw_outputscale.requires_grad_(False)
+        except:
+            print('Unable to fix variance')
+    if config_opt['fix_mean']:
+        try:
+            model.gp.mean_module.raw_constant.requires_grad_(False)
+        except:
+            print('Unable to fix variance')
+    ###
+
     # train
     if config_exp['train']:
-        model.fit(x=ds['train']['x'], y=ds['train']['y'], **config_opt)
+        fit_out = model.fit(x=ds['train']['x'], y=ds['train']['y'], **config_opt)
 
     res = {}
     for cond in ['prior', 'post']:
@@ -193,6 +217,13 @@ def main():
                 else:
                     wandb.log({file_name: wandb.Image(fig2img(fig))})
     
+            try:
+                fig, ax = plt.subplots()
+                ax.plot(fit_out['loss'])
+                fig.savefig(os.path.join(ARGS['dir_out'], 'loss.png'))
+            except:
+                pass
+
 
     # metrics that depend on prior AND posterior
     for cond in ['prior', 'post']:
@@ -230,6 +261,14 @@ def main():
         res['c_mean'] = np.mean(c)
         res['c_var'] = np.var(c)
 
+    ## manually get constant mean
+    try:
+        constant = model.gp.mean_module.constant.detach().numpy()
+        res['constant_mean'] = np.mean(constant)
+        res['constant_var'] = np.var(constant)
+    except:
+        pass
+
     # to flat for wandb
     if not TESTRUN:
         res_flat = to_flat_dict({}, res)
@@ -242,9 +281,17 @@ def main():
 
     ###
     print('nlpd:', res['post']['test']['ydist_error_nlpd'])
-    #print('lengthscale:', model.gp.covar_module.base_kernel.lengthscale)
-    #if config_m['name']=='filtered_gp':
-    #    print('c:', model.gp.c)
+
+    try:
+        print('lengthscale:', model.gp.covar_module.base_kernel.lengthscale.item())
+    except:
+        pass
+    try:
+        print('variance:', model.gp.covar_module.outputscale.item())
+    except:
+        pass
+    if config_m['name']=='filtered_gp':
+        print('c:', model.gp.c.item())
 
 
 

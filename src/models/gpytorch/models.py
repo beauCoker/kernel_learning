@@ -51,7 +51,11 @@ class LMLGP(object):
         else:
             mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
 
-        out = training_loop(model=self.gp, loss=mll, x=x, y=y, **kwargs)
+        # check if there are trainable params
+        if np.any([p.requires_grad for p in self.gp.parameters()]):
+            out = training_loop(model=self.gp, loss=mll, x=x, y=y, **kwargs)
+        else:
+            out = None
         self.gp.eval()
         return out
 
